@@ -38,6 +38,9 @@ STORE is insert-only, not an upsert: calling it twice with the same `id`
 returns `409 Conflict` on the second call rather than silently overwriting
 the existing entry.
 
+Request bodies are capped at 1 MB; larger requests return `413 Request
+Entity Too Large`.
+
 ### Example (curl)
 
 ```bash
@@ -63,7 +66,7 @@ curl -X DELETE "localhost:8080/delete/user-123?key=a1b2c3..."
 ### Using the Go client
 
 ```go
-import "github.com/annasapuzhak1/kv-store"
+import "github.com/annasapuzhak1/kv-store/client"
 
 c := client.New("http://localhost:8080")
 
@@ -157,6 +160,14 @@ the same ID (a possible brute-force attempt), without exposing that same
 detail externally. The encryption key itself is never logged, on failure
 or otherwise.
 
+### Server hardening
+
+The HTTP server sets read, write, and idle timeouts rather than using
+`http.ListenAndServe`'s defaults (which are none) - without them, a slow
+client can hold connections open indefinitely. Request bodies are capped
+at 1 MB via `http.MaxBytesReader`, so a single large upload can't exhaust
+server memory.
+
 ### Ciphertext/nonce representation
 
 `encryption.Encrypt` returns the ciphertext and the nonce used to produce
@@ -172,7 +183,7 @@ an implicit "first N bytes are the nonce" convention.
 ### Storage: in-memory
 
 The spec explicitly says "there are no particular requirements for how the
-data is stored," so I used a simple `map[string][]byte` guarded by a
+data is stored," so I used a simple `map[string]Entry` guarded by a
 `sync.RWMutex` rather than an embedded database (e.g. bbolt) or an external
 one (e.g. Postgres). This keeps the project trivially easy to run/verify
 (no external dependencies, no files to clean up) and let me spend the
@@ -223,3 +234,8 @@ added alongside them without touching `service`, `storage`, or
   rather than the plaintext ID.
 - **Split storage into its own microservice**, so storage and encryption
   can scale independently, as suggested in the brief.
+  - **Atomic Update and Delete.** Both verify the caller's key by decrypting
+  the existing entry, then perform the write as a separate step. Between
+  those two steps a concurrent request could modify or delete the same id.
+  Fixing this properly would need either a compare-and-swap operation on
+  the `storage.Store` interface, or per-id locking in the service layer.

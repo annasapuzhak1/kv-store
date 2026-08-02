@@ -95,13 +95,12 @@ func (s *Service) Retrieve(id, keyHex string) ([]byte, error) {
 	return plaintext, nil
 }
 
-// Update re-encrypts newData using the SAME key the caller already holds
-// (a fresh nonce is still generated, since nonces must never repeat even
-// under the same key), and overwrites the entry stored under id. Per the
-// task spec, Update's output is empty - the key does not change, so the
-// caller keeps using the same key they got from Store for future
-// Retrieve/Update/Delete calls. The caller must supply the correct current
-// key to prove they are allowed to update the entry.
+// Update re-encrypts newData with the same key (a fresh nonce is generated
+// each time). The caller must supply the correct key, which also proves the
+// entry exists. The key does not change, per the spec.
+//
+// Known limitation: the key check and the write are not atomic - a
+// concurrent request could modify the same id in between.
 func (s *Service) Update(id, keyHex string, newData []byte) error {
 	if id == "" {
 		return ErrEmptyID
@@ -137,6 +136,9 @@ func (s *Service) Update(id, keyHex string, newData []byte) error {
 
 // Delete removes the entry stored under id. The caller must supply the
 // correct key to prove they are allowed to delete it.
+//
+// Known limitation: the key check and the delete are not atomic - a
+// concurrent request could modify the same id in between.
 func (s *Service) Delete(id, keyHex string) error {
 	if id == "" {
 		return ErrEmptyID
@@ -157,9 +159,6 @@ func (s *Service) Delete(id, keyHex string) error {
 }
 
 func decodeKey(keyHex string) ([]byte, error) {
-	if keyHex == "" {
-		return nil, ErrInvalidKey
-	}
 	key, err := hex.DecodeString(keyHex)
 	if err != nil || len(key) != encryption.KeySize {
 		return nil, ErrInvalidKey

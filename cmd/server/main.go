@@ -2,9 +2,11 @@
 package main
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/annasapuzhak1/kv-store/internal/api"
 	"github.com/annasapuzhak1/kv-store/internal/service"
@@ -24,8 +26,16 @@ func main() {
 	mux := http.NewServeMux()
 	handler.Routes(mux)
 
+	srv := &http.Server{
+		Addr:         addr,
+		Handler:      mux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	log.Printf("kv-store listening on %s", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("server failed: %v", err)
 	}
 }

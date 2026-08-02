@@ -12,6 +12,11 @@ import (
 	"github.com/annasapuzhak1/kv-store/internal/service"
 )
 
+// maxBodyBytes caps request body size. Without a cap, a single large
+// request would be read into memory in full, which is an easy way to
+// exhaust the server's memory.
+const maxBodyBytes = 1 << 20 // 1 MB
+
 // Handler holds the dependencies needed to serve HTTP requests.
 type Handler struct {
 	svc *service.Service
@@ -33,8 +38,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 // ---- request/response types ----
 
 type storeRequest struct {
-	ID   string `json:"id"`
-	Data string `json:"data"` // treated as raw bytes of the given string
+	ID string `json:"id"`
+	// Data must be text - binary needs base64 encoding by the caller.
+	Data string `json:"data"`
 }
 
 type storeResponse struct {
@@ -57,8 +63,7 @@ type errorResponse struct {
 
 func (h *Handler) handleStore(w http.ResponseWriter, r *http.Request) {
 	var req storeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -89,8 +94,7 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 	key := r.URL.Query().Get("key")
 
 	var req updateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeBody(w, r, &req) {
 		return
 	}
 
@@ -115,6 +119,25 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- helpers ----
+
+// decodeBody reads and decodes a size-limited JSON request body into dst.
+// It writes an error response and returns false if the body is too large
+// or malformed, in which case the caller should return immediately.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			log.Printf("%s %s -> request body exceeded %d bytes", r.Method, r.URL.Path, maxErr.Limit)
+			writeError(w, http.StatusRequestEntityTooLarge, "request body too large")
+			return false
+		}
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return false
+	}
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
